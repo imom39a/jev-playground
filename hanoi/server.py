@@ -114,9 +114,6 @@ class LaneWorker:
         self.paused = threading.Event()
         self.stop_event = threading.Event()
         self.thread = threading.Thread(target=self._run, daemon=True, name=f"hanoi-{side}")
-        self._v2_feedback: str | None = None
-        self._v2_rejected_seq: int | None = None
-        self._v2_rejected_labels: set[str] = set()
 
     def start(self) -> None:
         self.status = "live"
@@ -165,39 +162,11 @@ class LaneWorker:
             )
         return label, metadata, {}
 
-    def _v2_choices(
-        self, state: dict[str, object], choices: dict[str, str]
-    ) -> tuple[dict[str, object], dict[str, str]]:
-        """Remove labels JEV already vetoed for this exact session state."""
-        session_seq = state.get("session_seq")
-        if session_seq != self._v2_rejected_seq:
-            self._v2_rejected_seq = session_seq if isinstance(session_seq, int) else None
-            self._v2_rejected_labels.clear()
-            self._v2_feedback = None
-        remaining = {
-            label: description for label, description in choices.items()
-            if label not in self._v2_rejected_labels
-        }
-        filtered = dict(state)
-        filtered["available_choices"] = remaining
-        candidates = state.get("available_candidates")
-        if isinstance(candidates, list):
-            filtered["available_candidates"] = [
-                item for item in candidates
-                if isinstance(item, dict) and item.get("label") in remaining
-            ]
-        return filtered, remaining
-
     def _v2_choice(self, state: dict[str, object], choices: dict[str, str], actor: str) -> tuple[str | None, dict[str, object], dict[str, object]]:
-        state, choices = self._v2_choices(state, choices)
-        if not choices:
-            raise providers.ProviderError("judge_exhausted_candidates")
         proposal, metadata = providers.openrouter_choose(
             state, choices, self.model, timeout=self._provider_timeout(providers.OPENROUTER_TIMEOUT),
-            feedback=self._v2_feedback,
         )
         if proposal == WAIT:
-            self._v2_feedback = None
             return proposal, metadata, {}
         approved, probability, judge = providers.jev_score_proposal(
             state, choices, proposal, self.judge_model, threshold=self.threshold,
@@ -205,78 +174,111 @@ class LaneWorker:
         )
         judge_record: dict[str, object] = {"first": judge}
         if approved:
-            self._v2_feedback = None
             metadata = {**metadata, "judge": judge_record}
             return proposal, metadata, {"judge": judge_record}
 
-        self._v2_rejected_labels.add(proposal)
         repair_feedback = (
             f"JEV rejected {proposal} with score {probability:.2f}, below the "
             f"{self.threshold:.2f} threshold. Choose a different offered label."
         )
-        repair_state, repair_choices = self._v2_choices(state, choices)
-        if not repair_choices:
-            judge_record["repair_invalid"] = "no_remaining_candidate"
-            judge_record["outcome"] = "vetoed"
-            self._v2_feedback = repair_feedback
-            metadata = {**metadata, "judge": judge_record, "reason": "judge_rejected"}
-            return None, metadata, {"judge": judge_record}
         repaired, repaired_meta = providers.openrouter_choose(
-            repair_state, repair_choices, self.model,
+            state, choices, self.model,
             timeout=self._provider_timeout(providers.OPENROUTER_TIMEOUT), feedback=repair_feedback,
         )
         judge_record["repair_proposal"] = repaired
         judge_record["repair_turn"] = repaired_meta
         if repaired != WAIT and repaired != proposal:
             repair_approved, repair_probability, repair_judge = providers.jev_score_proposal(
-                repair_state, repair_choices, repaired, self.judge_model, threshold=self.threshold,
+                state, choices, repaired, self.judge_model, threshold=self.threshold,
                 timeout=self._provider_timeout(providers.JEV_TIMEOUT),
             )
             judge_record["repair"] = repair_judge
             if repair_approved:
                 judge_record["accepted_repair"] = True
-                self._v2_feedback = None
                 repaired_meta = {**repaired_meta, "judge": judge_record}
                 return repaired, repaired_meta, {"judge": judge_record}
-            self._v2_rejected_labels.add(repaired)
-            self._v2_feedback = (
-                f"JEV rejected {proposal} at {probability:.2f} and {repaired} at "
-                f"{repair_probability:.2f}. Both are below {self.threshold:.2f}; choose another "
-                "offered label for this unchanged board."
-            )
         else:
             judge_record["repair_invalid"] = "same_proposal" if repaired == proposal else "wait"
-            self._v2_feedback = (
-                f"JEV rejected {proposal} at {probability:.2f}. The repair did not provide a "
-                "different actionable label; choose another offered label for this unchanged board."
-            )
         judge_record["outcome"] = "vetoed"
         metadata = {**metadata, "judge": judge_record, "reason": "judge_rejected"}
         return None, metadata, {"judge": judge_record}
 
     def _decision_state(self, actor: str) -> dict[str, object]:
-        """Build the bounded participant view for one provider activation."""
-        state = self.session.snapshot(actor)
+        """Build the original bounded solver view from the local session head."""
+        snapshot = self.session.snapshot(actor)
         own: list[dict[str, object]] = []
         for decision in reversed(self.decisions):
             if decision.get("actor") != actor:
                 continue
             selected = decision.get("selected")
-            own.append({
-                "observed_session_seq": decision.get("observed_session_seq"),
-                "selected": selected if isinstance(selected, dict) else None,
-                "status": decision.get("status"),
-                "reason": decision.get("reason"),
-            })
+            source = selected if isinstance(selected, dict) else decision
+            compact: dict[str, object] = {}
+            label = source.get("label")
+            action_type = source.get("action_type")
+            disposition = decision.get("disposition")
+            if isinstance(label, str):
+                compact["label"] = label
+            if isinstance(action_type, str):
+                compact["action_type"] = action_type
+            if isinstance(disposition, str):
+                compact["disposition"] = disposition
+            if compact:
+                own.append(compact)
             if len(own) == 4:
                 break
         own.reverse()
-        completion = state.get("completion")
+        completion = snapshot.get("completion")
         claim_open = isinstance(completion, dict) and completion.get("claim_open") is True
-        state["activation_reason"] = "claim_review_requested" if claim_open else "board_changed"
-        state["recent_events"] = list(self.events)[-8:]
-        state["recent_own_decisions"] = own
-        return state
+        open_claim: dict[str, object] | None = None
+        if claim_open and isinstance(completion, dict):
+            claim = completion.get("claim")
+            approval = completion.get("approval_count")
+            quorum = completion.get("quorum")
+            open_claim = {
+                "claim_round": claim.get("claim_round") if isinstance(claim, dict) else None,
+                "work_revision": claim.get("work_revision") if isinstance(claim, dict) else None,
+                "electorate_size": claim.get("electorate_size") if isinstance(claim, dict) else None,
+                "assessments_by_member": completion.get("assessments_by_member", {}),
+                "approval_count": approval,
+                "endorsement_count": completion.get("endorsement_count"),
+                "quorum": quorum,
+                "accepted": (
+                    isinstance(approval, int)
+                    and isinstance(quorum, int)
+                    and approval >= quorum
+                ),
+            }
+        state_visit = snapshot.get("state_visit")
+        if not isinstance(state_visit, dict):
+            state_visit = {}
+        candidates = snapshot.get("available_candidates")
+        choices = snapshot.get("available_choices")
+        return {
+            "schema": "jev-playground.hanoi.solver-state.v1",
+            "activation_reason": "claim_review_requested" if claim_open else "board_changed",
+            "based_on_session_seq": snapshot.get("session_seq"),
+            "session_seq": snapshot.get("session_seq"),
+            "objective": snapshot.get("objective"),
+            "board": snapshot.get("board"),
+            "disks": snapshot.get("disks"),
+            "phase": snapshot.get("phase"),
+            "round": snapshot.get("round"),
+            "work_revision": snapshot.get("work_revision"),
+            "outcome": snapshot.get("outcome"),
+            "open_completion_claim": open_claim,
+            "completion": completion,
+            "target_reached": snapshot.get("target_reached"),
+            "claim_open": claim_open,
+            "recent_moves": snapshot.get("recent_moves", []),
+            "immediate_undo": snapshot.get("immediate_undo"),
+            "cycle_hint": bool(state_visit.get("cycle_hint", False)),
+            "choice_history": snapshot.get("choice_history", {}),
+            "available_choices": choices if isinstance(choices, dict) else {},
+            "available_candidates": candidates if isinstance(candidates, list) else [],
+            "recent_events": list(self.session.events)[-8:],
+            "recent_own_decisions": own,
+            "state_visit": state_visit,
+        }
 
     def _run(self) -> None:
         participants = list(self.session.participants)

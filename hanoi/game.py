@@ -291,15 +291,12 @@ class HanoiSession:
             notes: list[str] = []
             visits = facts["visits"]
             if isinstance(visits, int) and visits > 0:
-                notes.append(f"resulting board was seen {visits} time(s) before")
+                notes.append(f"this board was seen {visits} time(s) before")
             if facts["repeats_recent"]:
-                notes.append(
-                    "same directed move appeared recently"
-                    + (", but this resulting board is unseen" if visits == 0 else "")
-                )
+                notes.append("already played in the last few moves")
             if facts["undoes_last"]:
                 notes.append("reverses the most recent move")
-            description = f"Move disk {move.disk} from {move.source} to {move.destination}."
+            description = f"Move disk {move.disk} from rod {move.source} to rod {move.destination}."
             if notes:
                 description = f"{description} ({'; '.join(notes)})."
             if self.target_reached:

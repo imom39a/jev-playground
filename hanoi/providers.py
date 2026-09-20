@@ -178,18 +178,19 @@ def openrouter_choose(
     if not key:
         raise ProviderError("provider_key_missing")
     guidance = (
-        "You are the autonomous participant solving this Tower of Hanoi session. Treat the "
-        "supplied board and session_seq as authoritative. The objective is to move the full "
-        "tower to rod C under the stated rules. Choose exactly one offered label. Use "
-        "recent_moves, recent_own_decisions, cycle_hint, and choice_history: avoid an immediate "
-        "reverse or a successor board already seen when another legal move can make progress. "
-        "A repeated directed move can be necessary from a different board; if its successor is "
-        "unseen and it does not undo the last move, do not reject it merely because the label "
-        "appeared recently. The session never declares success from the board alone. If "
-        "target_reached is true and no claim is open, choose post_completion_claim. If a claim is "
-        "open, assess it from the visible board. Do not claim completion while target_reached is "
-        "false. Return JSON with label, based_on_session_seq, confidence, rationale, and optional "
-        "reason. You may instead return the matching canonical action and payload."
+        "You are an autonomous Tower of Hanoi participant. Read the supplied solver state: "
+        "the authoritative board at the current session sequence, the objective, the closed set "
+        "of available choices, bounded recent history, your previous decisions, cycle hints, and "
+        "any open completion claim with quorum status. choice_history marks each move that repeats "
+        "a recent move, reverses the last move, or returns to a board already seen; use it to judge "
+        "whether to break a cycle. If target_reached is true the objective board is already "
+        "assembled: post_completion_claim records it when no claim is open, and when a claim is "
+        "already open, assess it (endorse when the objective is met) instead of posting another "
+        "claim. Return exactly one JSON decision object with fields "
+        '{"based_on_session_seq": <integer sequence>, "action": <one choice or action name>, '
+        '"payload": <object>, "rationale": <optional one sentence>, '
+        '"reason": <optional progress|break_cycle|uncertain|abandon>}. '
+        "Do not invent moves or hidden instructions."
     )
     if feedback:
         guidance += (
@@ -242,17 +243,15 @@ def jev_choose(
                 "choice": {
                     "type": "choice",
                     "instructions": (
-                        "Choose the single next action that best advances the Tower of Hanoi "
-                        "objective. Use the authoritative current board, recent_moves, "
-                        "recent_own_decisions, cycle_hint, and choice_history. choice_history "
-                        "marks successor boards already seen, recently repeated moves, and moves "
-                        "that reverse the most recent move. Avoid reversals and visited successor "
-                        "boards first. A repeated move label can be necessary from a different "
-                        "board, so do not reject it when its successor is unseen and it does not "
-                        "undo the last move. If target_reached is true and no claim is open, choose "
-                        "post_completion_claim. If a claim is open, assess it from the visible "
-                        "board. Never claim completion while target_reached is false. Choose only "
-                        "one offered label and never invent a label."
+                        "Choose the single next action that best advances this Tower of Hanoi "
+                        "participant's work. Use the current board, the completion evidence, "
+                        "recent_moves, cycle_hint, and choice_history, which marks moves that "
+                        "repeat a recent move, reverse the last move, or return to a board that "
+                        "was already seen. If target_reached is true the objective board is "
+                        "already assembled: post_completion_claim records it when no claim is "
+                        "open, and when a claim is already open, assess it (endorse when the "
+                        "objective is met) instead of posting another claim. Choose the action "
+                        "you judge best, including deliberately breaking a cycle or waiting."
                     ),
                     "criteria": candidates,
                 }
@@ -300,20 +299,11 @@ def jev_score_proposal(
                 "judge": {
                     "type": "noul",
                     "instructions": (
-                        "Is proposed_action an admissible, non-regressive next action for the Tower "
-                        "of Hanoi objective? Verify it rather than requiring it to be the uniquely "
-                        "best move. Use the current board, available choices, recent_moves, "
-                        "cycle_hint, and choice_history. A useful setup move may temporarily move a "
-                        "small disk away from target rod C so a blocked larger disk can move; do not "
-                        "reject that fact alone. A repeated move label from a different board is "
-                        "also not a cycle when its successor board is unseen. Answer false when "
-                        "concrete evidence shows that the "
-                        "proposal immediately reverses the last move, returns to a board already "
-                        "seen, repeats a recent move without progress, claims completion while "
-                        "target_reached is false, or moves a disk off the completed target tower. "
-                        "Otherwise endorse a legal, unseen, non-reversing proposal. Answer true for "
-                        "post_completion_claim when target_reached is true and no claim is open. "
-                        "Score this proposal only; do not select a different action."
+                        "Consider proposed_action for this Tower of Hanoi participant. Does it best "
+                        "advance the objective board given the current board, recent_moves, "
+                        "cycle_hint, and choice_history? Answer true only when you would endorse it "
+                        "as the next action. Answer false when it reverses the most recent move, "
+                        "returns to a board already seen, or does not advance the objective."
                     ),
                 }
             },

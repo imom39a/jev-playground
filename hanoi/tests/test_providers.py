@@ -19,8 +19,9 @@ class ProviderTests(unittest.TestCase):
         self.assertEqual(payload["provider"], {"sort": "latency"})
         prompt = payload["messages"][1]["content"]
         self.assertIn("choice_history", prompt)
-        self.assertIn("recent_own_decisions", prompt)
-        self.assertIn("Do not claim completion while target_reached is false", prompt)
+        self.assertIn("your previous decisions", prompt)
+        self.assertIn("authoritative board at the current session sequence", prompt)
+        self.assertIn("based_on_session_seq", prompt)
 
     def test_openrouter_accepts_canonical_action_payload(self):
         decision = {
@@ -52,10 +53,9 @@ class ProviderTests(unittest.TestCase):
         self.assertEqual(payload["questions"]["judge"]["type"], "noul")
         self.assertEqual(payload["state"]["proposed_action"], "move:A>B:1")
         instructions = payload["questions"]["judge"]["instructions"]
-        self.assertIn("admissible, non-regressive", instructions)
-        self.assertIn("useful setup move", instructions)
-        self.assertIn("reverses the last move", instructions)
-        self.assertIn("target_reached is false", instructions)
+        self.assertIn("Does it best advance", instructions)
+        self.assertIn("reverses the most recent move", instructions)
+        self.assertIn("returns to a board already seen", instructions)
 
     def test_jev_choice_receives_completion_and_cycle_guidance(self):
         response = {"answers": {"choice": {"choice": "move:A>B:1", "confidence": 0.7, "probabilities": {"move:A>B:1": 0.7, "move:A>C:1": 0.3}}}}
@@ -63,7 +63,8 @@ class ProviderTests(unittest.TestCase):
             _, metadata = providers.jev_choose({}, {"move:A>B:1": "move"}, key="secret")
         instructions = request.call_args.args[1]["questions"]["choice"]["instructions"]
         self.assertIn("choice_history", instructions)
-        self.assertIn("Never claim completion while target_reached is false", instructions)
+        self.assertIn("completion evidence", instructions)
+        self.assertIn("deliberately breaking a cycle", instructions)
         self.assertEqual(metadata["probabilities"]["move:A>B:1"], 0.7)
 
     def test_dotenv_aliases(self):

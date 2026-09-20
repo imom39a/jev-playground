@@ -73,11 +73,17 @@ class ServerTests(unittest.TestCase):
                 "selected": {"label": f"move-{index}"},
                 "status": "accepted",
                 "reason": "progress",
+                "disposition": "act",
             })
         state = worker._decision_state("llm-solver")
         self.assertEqual(len(state["recent_own_decisions"]), 4)
-        self.assertEqual(state["recent_own_decisions"][0]["observed_session_seq"], 2)
+        self.assertEqual(state["recent_own_decisions"][0]["label"], "move-2")
+        self.assertEqual(state["recent_own_decisions"][0]["disposition"], "act")
         self.assertEqual(state["activation_reason"], "board_changed")
+        self.assertEqual(state["schema"], "jev-playground.hanoi.solver-state.v1")
+        self.assertEqual(state["board"], {"A": [3, 2, 1], "B": [], "C": []})
+        self.assertIsInstance(state["cycle_hint"], bool)
+        self.assertNotIn("recent_history", state)
 
     def _v2_worker(self) -> tuple[LaneWorker, dict[str, object], dict[str, str]]:
         run = ComparisonRun(Path("."), EventBus())
@@ -110,6 +116,7 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(metadata["rationale"], "repair")
         self.assertTrue(metadata["judge"]["accepted_repair"])
         self.assertIn("Choose a different offered label", choose.call_args_list[1].kwargs["feedback"])
+        self.assertEqual(choose.call_args_list[1].args[1], choices)
 
     def test_v2_below_threshold_repair_is_vetoed_even_if_score_improves(self):
         worker, state, choices = self._v2_worker()
@@ -124,7 +131,6 @@ class ServerTests(unittest.TestCase):
         self.assertIsNone(label)
         self.assertEqual(metadata["judge"]["outcome"], "vetoed")
         self.assertNotIn("accepted_repair", metadata["judge"])
-        self.assertIn("both are below", worker._v2_feedback.lower())
 
     def test_v2_duplicate_repair_is_vetoed_without_rescoring(self):
         worker, state, choices = self._v2_worker()
@@ -138,17 +144,15 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(score.call_count, 1)
         self.assertEqual(metadata["judge"]["repair_invalid"], "same_proposal")
 
-    def test_v2_does_not_reoffer_a_vetoed_label_at_same_state(self):
-        worker, state, choices = self._v2_worker()
-        worker._v2_rejected_seq = state["session_seq"]
-        worker._v2_rejected_labels.add("move:A>B:1")
-        filtered_state, filtered_choices = worker._v2_choices(state, choices)
-        self.assertNotIn("move:A>B:1", filtered_choices)
-        self.assertNotIn(
-            "move:A>B:1",
-            {item["label"] for item in filtered_state["available_candidates"]},
-        )
-        self.assertIn("move:A>C:1", filtered_choices)
+    def test_provider_state_uses_action_events_not_ui_decision_traces(self):
+        run = ComparisonRun(Path("."), EventBus())
+        worker = LaneWorker(run, "right", HanoiSession(3, participants=["solver"]), "openrouter", "model", "judge", 0.5)
+        worker.session.act("solver", 0, "move_disk", {"from": "A", "to": "C", "disk": 1})
+        worker.events.append({"kind": "participant_decision", "actor": "solver"})
+        state = worker._decision_state("solver")
+        self.assertEqual([event["kind"] for event in state["recent_events"]], ["disk_moved"])
+        self.assertEqual(state["session_seq"], 1)
+        self.assertEqual(state["board"], {"A": [3, 2], "B": [], "C": [1]})
 
     def test_v2_veto_records_no_action_and_does_not_advance_session(self):
         worker, _, _ = self._v2_worker()
