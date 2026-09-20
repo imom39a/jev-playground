@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Jev · Flight Lab</title><link rel="stylesheet" href="/styles.css">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23182720'/%3E%3Cpath d='M8 23 16 7 24 23 16 19Z' fill='%23bbf096'/%3E%3C/svg%3E">
+</head>
+<body>
+  <header class="topbar"><a class="brand" href="/"><span class="brand-icon">↗</span> jev<span class="brand-divider">/</span><span class="brand-name">FLIGHT LAB</span></a><div class="top-status"><span class="pill"><i></i> SIMULATION ONLY</span><span class="hardware-label">PL-515 · physical control disabled</span></div><button id="hold" class="hold-button">■ Hold position <kbd>Esc</kbd></button></header>
+  <main>
+    <aside class="sidebar">
+      <div class="intro"><span class="eyebrow">01 / CONTROLS</span><h1>Drone commands</h1><p>Send text commands to the simulator using Jev, an LLM, or exact phrase matching.</p></div>
+      <form id="command-form" class="command-card">
+        <div class="section-line"><label for="provider">Decision engine</label><span id="engine-status" class="mini-label">LOCAL</span></div>
+        <select id="provider"><option value="offline">Offline · exact phrases</option><option value="jev" disabled>Jev · checking configuration…</option><option value="llm" disabled>LLM · checking configuration…</option></select>
+        <label for="command" class="sr-only">Drone command</label><textarea id="command" rows="2" maxlength="1500" placeholder="e.g. turn a little to the left">take off</textarea>
+        <div class="command-actions"><button id="send" type="submit" class="primary">Run command <span>↗</span></button><button id="mic" type="button" class="mic" aria-label="Dictate a command" title="Dictate using your browser's speech service">♩</button></div>
+        <p id="provider-note" class="fine-print">Exact example phrases work without API keys.</p>
+        <div class="examples"><button type="button" data-prompt="take off">Take off</button><button type="button" data-prompt="turn left a little">Turn left</button><button type="button" data-prompt="move forward">Forward</button><button type="button" data-prompt="land">Land</button></div>
+      </form>
+      <section id="decision" class="decision-card" aria-live="polite"><div class="section-line"><h2>Last decision</h2><span id="latency" class="mono">— ms</span></div><strong id="decision-action">No command submitted.</strong><p id="decision-detail">The selected action and model output will appear here.</p><div id="probabilities"></div></section>
+      <section class="manual"><div class="section-line"><h2>Direct controls</h2><span class="mini-label">NO MODEL CALL</span></div><div class="control-grid"><button data-action="takeoff">↗ Take off</button><button data-action="land">↙ Land</button><button data-action="forward">↑ Forward</button><button data-action="backward">↓ Backward</button><button data-action="left">← Slide left</button><button data-action="right">→ Slide right</button><button data-action="turn_left">↶ Turn left</button><button data-action="turn_right">↷ Turn right</button><button data-action="up">＋ Altitude</button><button data-action="down">− Altitude</button></div></section>
+      <div class="sidebar-bottom"><span class="tiny-dot"></span> Simulation commands cannot reach hardware.</div>
+    </aside>
+    <section class="workspace">
+      <div class="workspace-header"><div><span class="eyebrow">02 / SIMULATION</span><h2>3D simulator</h2></div><a href="https://github.com/vroby65/DroneCommander" target="_blank" rel="noreferrer" class="upstream-link">Drone Commander source ↗</a></div>
+      <div class="sim-shell">
+        <div class="sim-toolbar"><div class="scene-picker"><span class="status-dot" id="connection-dot"></span><label for="scene" class="sr-only">Simulation scene</label><select id="scene"><option value="campo.json">Flight field</option><option value="citta.json">Urban track</option><option value="metropoli.json">Metropolis</option><option value="isola.json">Tropical island</option></select></div><div class="sim-tools"><button id="editor">Show Blockly</button><button id="reset">↻ Reset</button></div></div>
+        <div class="frame-wrap"><iframe id="sim" title="Drone Commander 3D simulator" src="/sim/" allow="autoplay"></iframe><div id="loading"><span class="loader"></span><strong>Loading simulator</strong><span>Loading the scene, drone model, and camera view.</span></div><span class="canvas-label">SYNTHETIC CAMERA & WORLD</span></div>
+        <div class="telemetry"><div><span>FLIGHT STATE</span><strong id="flight-state">Loading</strong></div><div><span>ALTITUDE</span><strong id="altitude">— <small>u</small></strong></div><div><span>POSITION X / Z</span><strong id="position">— / —</strong></div><div><span>HEADING</span><strong id="heading">—°</strong></div></div>
+      </div>
+      <p class="sim-note"><span>↔</span> Drag to orbit the view. Scroll to zoom. Distances are simulator units (u), not calibrated drone meters.</p>
+      <div class="bottom-grid">
+        <section class="experiments"><div class="section-line"><h2>Failure tests</h2><span class="mini-label">SIMULATOR</span></div><label class="toggle-row"><span>Simulate link loss<small>Cancel movement and block new commands.</small></span><input id="link-loss" type="checkbox" role="switch"></label><button id="collision" class="outline-button">Test collision recovery ↗</button><p class="fine-print">Uses Drone Commander's simulated emergency landing. Physical landing behavior has not been tested.</p></section>
+        <section class="camera-tools"><div class="section-line"><h2>Camera analysis</h2><span class="mini-label">VISION → JEV</span></div><p>Read one camera frame with a vision model, then classify the description with Jev.</p><button id="analyze" class="outline-button">Analyze camera frame ↗</button><p id="vision-note" class="fine-print">Runs only when clicked. Observations do not trigger flight.</p></section>
+        <section class="event-panel"><div class="section-line"><h2>Flight log</h2><button id="export" class="text-button">Export</button></div><ol id="log"><li><time>READY</time><span>Waiting for simulator connection.</span></li></ol></section>
+      </div>
+      <section id="vision-result" class="vision-result" hidden><img id="vision-frame" alt="Analyzed frame from the simulated drone camera"><div><span class="eyebrow">CAMERA OBSERVATION</span><p id="vision-description"></p><p id="vision-classification" class="mono"></p></div></section>
+      <footer><span>Physical drone control is disabled.</span><button id="hardware" class="text-button">Check local TurboDrone bridge</button><span id="hardware-status">Flight disabled</span></footer>
+    </section>
+  </main>
+  <div id="toast" role="status" hidden></div>
+  <script type="module" src="/app.mjs"></script>
+</body>
+</html>

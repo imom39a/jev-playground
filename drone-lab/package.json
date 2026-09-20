@@ -1,0 +1,16 @@
+{
+  "name": "jev-flight-lab",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=22.12" },
+  "scripts": {
+    "dev": "bash scripts/start.sh",
+    "start": "bash scripts/start.sh --production",
+    "setup": "node scripts/setup.mjs",
+    "test": "node --test test/*.test.mjs",
+    "check": "node scripts/check.mjs && npm run test",
+    "setup:drone": "bash scripts/setup-turbodrone.sh"
+  },
+  "dependencies": {}
+}

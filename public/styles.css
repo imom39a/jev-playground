@@ -1,0 +1,175 @@
+:root {
+  color-scheme: light;
+  font-family: system-ui, sans-serif;
+  line-height: 1.5;
+  color: #202520;
+  background: #fff;
+}
+
+body {
+  margin: 0;
+  padding: 24px;
+}
+
+main {
+  max-width: 1180px;
+  margin: 0 auto;
+}
+
+h1 {
+  margin-bottom: 0;
+}
+
+form,
+#comparison-controls,
+#run-status,
+#shared-details,
+.results {
+  margin-top: 20px;
+}
+
+form,
+#comparison-controls,
+article {
+  padding: 16px;
+  border: 1px solid #aaa;
+}
+
+.input-grid,
+.results {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 20px;
+}
+
+.mood-row {
+  display: flex;
+  align-items: end;
+  gap: 12px;
+  margin-top: 14px;
+}
+
+label {
+  display: block;
+}
+
+input,
+select,
+textarea,
+button {
+  box-sizing: border-box;
+  font: inherit;
+}
+
+input,
+select,
+textarea {
+  display: block;
+  width: 100%;
+  margin-top: 6px;
+  padding: 8px;
+}
+
+textarea {
+  resize: vertical;
+}
+
+.mood-row + label {
+  margin-top: 14px;
+}
+
+button {
+  margin-top: 14px;
+  padding: 8px 14px;
+  cursor: pointer;
+}
+
+.mood-row button {
+  margin: 0;
+  white-space: nowrap;
+}
+
+button:disabled {
+  cursor: wait;
+}
+
+article {
+  min-width: 0;
+}
+
+article h2 {
+  margin-top: 0;
+}
+
+.map {
+  height: 360px;
+  margin: 12px 0;
+  border: 1px solid #bbb;
+  background: #f4f4f4;
+}
+
+.map > p {
+  padding: 16px;
+}
+
+.choice {
+  min-height: 52px;
+  padding: 10px;
+  border-left: 4px solid #777;
+  background: #f5f5f5;
+}
+
+pre {
+  min-height: 180px;
+  overflow: auto;
+  padding: 12px;
+  background: #f5f5f5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+table {
+  width: 100%;
+  margin-top: 12px;
+  border-collapse: collapse;
+}
+
+th,
+td {
+  padding: 6px;
+  border: 1px solid #ccc;
+  text-align: left;
+  vertical-align: top;
+}
+
+code {
+  font-size: 0.9em;
+}
+
+.attribution {
+  font-size: 13px;
+  color: #555;
+}
+
+@media (max-width: 760px) {
+  body {
+    padding: 14px;
+  }
+
+  .input-grid,
+  .results {
+    grid-template-columns: 1fr;
+  }
+
+  .mood-row {
+    display: block;
+  }
+
+  .mood-row button {
+    margin-top: 10px;
+  }
+
+  .map {
+    height: 300px;
+  }
+}

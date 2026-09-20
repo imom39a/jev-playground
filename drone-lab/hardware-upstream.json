@@ -1,0 +1,10 @@
+{
+  "name": "TurboDrone",
+  "repository": "https://github.com/marshallrichards/turbodrone.git",
+  "commit": "2c09cf864e7c26d2f5e674a11d3d87cc308c3a83",
+  "directory": ".vendor/turbodrone",
+  "license": "Apache-2.0",
+  "checkedAt": "2026-09-20",
+  "driver": "s2x",
+  "flightEnabled": false
+}

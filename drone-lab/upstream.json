@@ -1,0 +1,8 @@
+{
+  "name": "Drone Commander",
+  "repository": "https://github.com/vroby65/DroneCommander.git",
+  "commit": "7c21099f8e1ff9c9d6a9afceb0a7a7b156f8dab6",
+  "license": "MIT",
+  "directory": ".vendor/drone-commander",
+  "checkedOn": "2026-09-20"
+}

@@ -1,0 +1,13 @@
+.env
+.env.*
+!.env.example
+.DS_Store
+.vendor/
+
+.venv/
+node_modules/
+build/
+*.egg-info/
+.pytest_cache/
+__pycache__/
+*.pyc

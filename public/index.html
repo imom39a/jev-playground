@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="Vibe Planner compares a regular LLM with TypeSafe Jev on the same live route data." />
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='5' fill='%231b4d3e'/%3E%3Cpath d='M7 23c5-10 7-13 11-13 3 0 4 3 7 3M18 10l-2-3m2 3 3-2' fill='none' stroke='white' stroke-width='3' stroke-linecap='round'/%3E%3C/svg%3E" />
+    <title>Vibe Planner</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main>
+      <h1>Vibe Planner</h1>
+      <p id="service-status">Checking services…</p>
+
+      <form id="plan-form">
+        <div class="input-grid">
+          <label for="origin"><strong>Start</strong>
+            <input id="origin" name="origin" autocomplete="street-address" required />
+          </label>
+          <label for="destination"><strong>Destination</strong>
+            <input id="destination" name="destination" autocomplete="street-address" required />
+          </label>
+        </div>
+
+        <div class="mood-row">
+          <label for="mood-select"><strong>Mood / vibe</strong>
+            <select id="mood-select" name="mood">
+              <option value="calm">Calm &amp; cozy</option>
+              <option value="scenic">Scenic &amp; unhurried</option>
+              <option value="focused">Fast &amp; focused</option>
+              <option value="rainy">Rainy-day comfort</option>
+              <option value="night">Late-night low-key</option>
+            </select>
+          </label>
+          <button id="random-mood" type="button">Pick a random vibe</button>
+        </div>
+
+        <label for="intent"><strong>Trip request</strong>
+          <textarea id="intent" rows="4" maxlength="800"></textarea>
+        </label>
+
+        <button id="plan-button" type="submit">1. Load route data</button>
+      </form>
+
+      <section id="comparison-controls" aria-label="Comparison controls">
+        <label for="llm-model-select"><strong>Regular LLM model</strong>
+          <select id="llm-model-select" name="model">
+            <option value="">Loading models…</option>
+          </select>
+        </label>
+        <p>Shared input fingerprint: <code id="state-fingerprint">load a route first</code></p>
+        <button id="race-button" type="button" disabled>2. Compare LLM vs Jev</button>
+      </section>
+
+      <p id="run-status" aria-live="polite">Choose a start, destination, and vibe, then load the route data.</p>
+
+      <section class="results" aria-label="Side-by-side route results">
+        <article>
+          <h2>Regular LLM</h2>
+          <p id="llm-model">Waiting for route data</p>
+          <div id="llm-map" class="map" aria-label="Regular LLM route map"><p>Map appears after route data loads.</p></div>
+          <p><strong id="llm-time">—</strong></p>
+          <p id="llm-status">Not started</p>
+          <div id="llm-choice" class="choice">No route selected yet.</div>
+          <details><summary>Decision data</summary><pre id="llm-result">No result yet.</pre></details>
+        </article>
+
+        <article>
+          <h2>Jev / System One</h2>
+          <p id="jev-model">Waiting for route data</p>
+          <div id="jev-map" class="map" aria-label="Jev route map"><p>Map appears after route data loads.</p></div>
+          <p><strong id="jev-time">—</strong></p>
+          <p id="jev-status">Not started</p>
+          <div id="jev-choice" class="choice">No route selected yet.</div>
+          <details><summary>Decision data</summary><pre id="jev-result">No result yet.</pre></details>
+        </article>
+      </section>
+
+      <details id="shared-details">
+        <summary>View the shared route, café, and weather data</summary>
+        <div id="shared-data"><p>Load route data to see the evidence sent to both engines.</p></div>
+      </details>
+
+      <p class="attribution">Maps and place data © OpenStreetMap contributors. Routes from OSRM. Weather from Open-Meteo.</p>
+    </main>
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>

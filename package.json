@@ -1,0 +1,16 @@
+{
+  "name": "jev-playground",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node server.mjs",
+    "dev": "node --watch server.mjs",
+    "check": "node --check server.mjs && node --check public/app.js",
+    "minesweeper": "python3 -m minesweeper.server",
+    "minesweeper:test": "python3 -m unittest discover -s minesweeper -p 'test_*.py'"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
