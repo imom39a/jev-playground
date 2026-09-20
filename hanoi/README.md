@@ -5,7 +5,10 @@ Python server on port `5491`:
 
 - `/` compares the selected OpenRouter model with JEV.
 - `/v2/` compares the selected OpenRouter model with the same model plus a JEV
-  score and at most one repair turn.
+  verification score and at most one repair turn. A proposal mutates the board
+  only when its score reaches the configured threshold. If both proposals are
+  rejected, the event records a veto with no action; rejected labels are not
+  offered again until the board state changes.
 
 ```bash
 npm run hanoi
@@ -37,8 +40,8 @@ the outcome.
 Provider access is server-side. The loader accepts `OPENROUTER_API_KEY`,
 `OPENROUTER_KEY`, or the existing `openouterkey` alias, and `JEV_API_KEY` or
 `TYPESAFE_API_KEY`. No key is sent to the browser. The server sends no custom
-title header to providers. If keys are absent, bounded local legal choices keep
-the page inspectable and mark those traces with the provider error.
+title header to providers. Provider failures are shown in the decision trace
+and stop that lane without submitting a local fallback move.
 
 Run focused tests with:
 

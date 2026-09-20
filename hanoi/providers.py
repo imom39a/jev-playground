@@ -182,15 +182,20 @@ def openrouter_choose(
         "supplied board and session_seq as authoritative. The objective is to move the full "
         "tower to rod C under the stated rules. Choose exactly one offered label. Use "
         "recent_moves, recent_own_decisions, cycle_hint, and choice_history: avoid an immediate "
-        "reverse, a recently repeated move, or a successor board already seen when another legal "
-        "move can make progress. The session never declares success from the board alone. If "
+        "reverse or a successor board already seen when another legal move can make progress. "
+        "A repeated directed move can be necessary from a different board; if its successor is "
+        "unseen and it does not undo the last move, do not reject it merely because the label "
+        "appeared recently. The session never declares success from the board alone. If "
         "target_reached is true and no claim is open, choose post_completion_claim. If a claim is "
         "open, assess it from the visible board. Do not claim completion while target_reached is "
         "false. Return JSON with label, based_on_session_seq, confidence, rationale, and optional "
         "reason. You may instead return the matching canonical action and payload."
     )
     if feedback:
-        guidance += f" A verifier rejected the previous proposal: {feedback}. Repair it once."
+        guidance += (
+            f" A verifier rejected the previous proposal: {feedback} "
+            "You must choose a different offered label for the repair."
+        )
     response = _http_json(
         OPENROUTER_URL,
         {
@@ -241,8 +246,10 @@ def jev_choose(
                         "objective. Use the authoritative current board, recent_moves, "
                         "recent_own_decisions, cycle_hint, and choice_history. choice_history "
                         "marks successor boards already seen, recently repeated moves, and moves "
-                        "that reverse the most recent move; avoid those when another offered move "
-                        "can make progress. If target_reached is true and no claim is open, choose "
+                        "that reverse the most recent move. Avoid reversals and visited successor "
+                        "boards first. A repeated move label can be necessary from a different "
+                        "board, so do not reject it when its successor is unseen and it does not "
+                        "undo the last move. If target_reached is true and no claim is open, choose "
                         "post_completion_claim. If a claim is open, assess it from the visible "
                         "board. Never claim completion while target_reached is false. Choose only "
                         "one offered label and never invent a label."
@@ -293,14 +300,20 @@ def jev_score_proposal(
                 "judge": {
                     "type": "noul",
                     "instructions": (
-                        "Would you endorse proposed_action as the best next action for the Tower "
-                        "of Hanoi objective? Use the current board, recent_moves, cycle_hint, and "
-                        "choice_history. Answer false when the proposal immediately reverses the "
-                        "last move, returns to a board already seen, repeats a recent move without "
-                        "progress, claims completion while target_reached is false, or moves a disk "
-                        "off the completed target tower. Answer true for post_completion_claim when "
-                        "target_reached is true and no claim is open. Score this proposal only; do "
-                        "not select a different action."
+                        "Is proposed_action an admissible, non-regressive next action for the Tower "
+                        "of Hanoi objective? Verify it rather than requiring it to be the uniquely "
+                        "best move. Use the current board, available choices, recent_moves, "
+                        "cycle_hint, and choice_history. A useful setup move may temporarily move a "
+                        "small disk away from target rod C so a blocked larger disk can move; do not "
+                        "reject that fact alone. A repeated move label from a different board is "
+                        "also not a cycle when its successor board is unseen. Answer false when "
+                        "concrete evidence shows that the "
+                        "proposal immediately reverses the last move, returns to a board already "
+                        "seen, repeats a recent move without progress, claims completion while "
+                        "target_reached is false, or moves a disk off the completed target tower. "
+                        "Otherwise endorse a legal, unseen, non-reversing proposal. Answer true for "
+                        "post_completion_claim when target_reached is true and no claim is open. "
+                        "Score this proposal only; do not select a different action."
                     ),
                 }
             },

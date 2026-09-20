@@ -52,6 +52,8 @@ class ProviderTests(unittest.TestCase):
         self.assertEqual(payload["questions"]["judge"]["type"], "noul")
         self.assertEqual(payload["state"]["proposed_action"], "move:A>B:1")
         instructions = payload["questions"]["judge"]["instructions"]
+        self.assertIn("admissible, non-regressive", instructions)
+        self.assertIn("useful setup move", instructions)
         self.assertIn("reverses the last move", instructions)
         self.assertIn("target_reached is false", instructions)
 

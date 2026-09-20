@@ -114,7 +114,9 @@ class LaneWorker:
         self.paused = threading.Event()
         self.stop_event = threading.Event()
         self.thread = threading.Thread(target=self._run, daemon=True, name=f"hanoi-{side}")
-        self._last_move_choice: str | None = None
+        self._v2_feedback: str | None = None
+        self._v2_rejected_seq: int | None = None
+        self._v2_rejected_labels: set[str] = set()
 
     def start(self) -> None:
         self.status = "live"
@@ -140,59 +142,117 @@ class LaneWorker:
         self.full_events.append(safe)
         self.run.publish()
 
-    def _choice_offline(self, state: dict[str, object], choices: dict[str, str], actor: str) -> tuple[str, dict[str, object]]:
-        completion = state.get("completion") if isinstance(state.get("completion"), dict) else {}
-        if completion.get("claim_open") and "assess:endorse" in choices:
-            return "assess:endorse", {"offline": True, "confidence": 0.6, "rationale": "bounded local fallback reviewed the open claim"}
-        if state.get("target_reached") and POST_CLAIM in choices:
-            return POST_CLAIM, {"offline": True, "confidence": 0.9, "rationale": "the objective board is assembled and needs a participant claim"}
-        move_labels = [label for label in choices if label.startswith("move:")]
-        if self._last_move_choice:
-            try:
-                _, rods, disk = self._last_move_choice.split(":")
-                source, destination = rods.split(">")
-                reverse = f"move:{destination}>{source}:{disk}"
-                preferred = [label for label in move_labels if label != reverse]
-                if preferred:
-                    move_labels = preferred
-            except ValueError:
-                pass
-        if move_labels:
-            return move_labels[0], {"offline": True, "confidence": 0.2, "rationale": "provider unavailable; selected the first legal candidate"}
-        return WAIT, {"offline": True, "confidence": 0.0, "rationale": "no actionable candidate was available"}
+    def _provider_timeout(self, maximum: float) -> float:
+        """Cap each call by the comparison's remaining wall-clock budget."""
+        if self.stop_event.is_set():
+            raise providers.ProviderError("run_deadline_reached")
+        deadline = self.run.deadline_at_ms
+        if deadline is None:
+            return maximum
+        remaining = (deadline - int(time.time() * 1000)) / 1000
+        if remaining < 1.0:
+            raise providers.ProviderError("run_deadline_reached")
+        return min(maximum, remaining)
 
     def _provider_choice(self, state: dict[str, object], choices: dict[str, str], actor: str) -> tuple[str, dict[str, object], dict[str, object]]:
         if self.engine == "jev":
-            label, metadata = providers.jev_choose(state, choices, self.model)
+            label, metadata = providers.jev_choose(
+                state, choices, self.model, timeout=self._provider_timeout(providers.JEV_TIMEOUT)
+            )
         else:
-            label, metadata = providers.openrouter_choose(state, choices, self.model)
+            label, metadata = providers.openrouter_choose(
+                state, choices, self.model, timeout=self._provider_timeout(providers.OPENROUTER_TIMEOUT)
+            )
         return label, metadata, {}
 
-    def _v2_choice(self, state: dict[str, object], choices: dict[str, str], actor: str) -> tuple[str, dict[str, object], dict[str, object]]:
-        proposal, metadata = providers.openrouter_choose(state, choices, self.model)
+    def _v2_choices(
+        self, state: dict[str, object], choices: dict[str, str]
+    ) -> tuple[dict[str, object], dict[str, str]]:
+        """Remove labels JEV already vetoed for this exact session state."""
+        session_seq = state.get("session_seq")
+        if session_seq != self._v2_rejected_seq:
+            self._v2_rejected_seq = session_seq if isinstance(session_seq, int) else None
+            self._v2_rejected_labels.clear()
+            self._v2_feedback = None
+        remaining = {
+            label: description for label, description in choices.items()
+            if label not in self._v2_rejected_labels
+        }
+        filtered = dict(state)
+        filtered["available_choices"] = remaining
+        candidates = state.get("available_candidates")
+        if isinstance(candidates, list):
+            filtered["available_candidates"] = [
+                item for item in candidates
+                if isinstance(item, dict) and item.get("label") in remaining
+            ]
+        return filtered, remaining
+
+    def _v2_choice(self, state: dict[str, object], choices: dict[str, str], actor: str) -> tuple[str | None, dict[str, object], dict[str, object]]:
+        state, choices = self._v2_choices(state, choices)
+        if not choices:
+            raise providers.ProviderError("judge_exhausted_candidates")
+        proposal, metadata = providers.openrouter_choose(
+            state, choices, self.model, timeout=self._provider_timeout(providers.OPENROUTER_TIMEOUT),
+            feedback=self._v2_feedback,
+        )
         if proposal == WAIT:
+            self._v2_feedback = None
             return proposal, metadata, {}
-        approved, probability, judge = providers.jev_score_proposal(state, choices, proposal, self.judge_model, threshold=self.threshold)
+        approved, probability, judge = providers.jev_score_proposal(
+            state, choices, proposal, self.judge_model, threshold=self.threshold,
+            timeout=self._provider_timeout(providers.JEV_TIMEOUT),
+        )
         judge_record: dict[str, object] = {"first": judge}
-        selected = proposal
-        if not approved:
-            repaired, repaired_meta = providers.openrouter_choose(
-                state, choices, self.model,
-                feedback=f"the proposal scored {probability:.2f}, below the {self.threshold:.2f} threshold",
+        if approved:
+            self._v2_feedback = None
+            metadata = {**metadata, "judge": judge_record}
+            return proposal, metadata, {"judge": judge_record}
+
+        self._v2_rejected_labels.add(proposal)
+        repair_feedback = (
+            f"JEV rejected {proposal} with score {probability:.2f}, below the "
+            f"{self.threshold:.2f} threshold. Choose a different offered label."
+        )
+        repair_state, repair_choices = self._v2_choices(state, choices)
+        if not repair_choices:
+            judge_record["repair_invalid"] = "no_remaining_candidate"
+            judge_record["outcome"] = "vetoed"
+            self._v2_feedback = repair_feedback
+            metadata = {**metadata, "judge": judge_record, "reason": "judge_rejected"}
+            return None, metadata, {"judge": judge_record}
+        repaired, repaired_meta = providers.openrouter_choose(
+            repair_state, repair_choices, self.model,
+            timeout=self._provider_timeout(providers.OPENROUTER_TIMEOUT), feedback=repair_feedback,
+        )
+        judge_record["repair_proposal"] = repaired
+        judge_record["repair_turn"] = repaired_meta
+        if repaired != WAIT and repaired != proposal:
+            repair_approved, repair_probability, repair_judge = providers.jev_score_proposal(
+                repair_state, repair_choices, repaired, self.judge_model, threshold=self.threshold,
+                timeout=self._provider_timeout(providers.JEV_TIMEOUT),
             )
-            judge_record["repair_proposal"] = repaired
-            judge_record["repair_turn"] = repaired_meta
-            if repaired != WAIT:
-                repair_approved, repair_probability, repair_judge = providers.jev_score_proposal(
-                    state, choices, repaired, self.judge_model, threshold=self.threshold
-                )
-                judge_record["repair"] = repair_judge
-                if repair_approved or repair_probability > probability:
-                    selected = repaired
-                    judge_record["accepted_repair"] = True
-        metadata = {**metadata, "judge": judge_record}
-        # The judge only scores proposals. `selected` always came from the LLM.
-        return selected, metadata, {"judge": judge_record}
+            judge_record["repair"] = repair_judge
+            if repair_approved:
+                judge_record["accepted_repair"] = True
+                self._v2_feedback = None
+                repaired_meta = {**repaired_meta, "judge": judge_record}
+                return repaired, repaired_meta, {"judge": judge_record}
+            self._v2_rejected_labels.add(repaired)
+            self._v2_feedback = (
+                f"JEV rejected {proposal} at {probability:.2f} and {repaired} at "
+                f"{repair_probability:.2f}. Both are below {self.threshold:.2f}; choose another "
+                "offered label for this unchanged board."
+            )
+        else:
+            judge_record["repair_invalid"] = "same_proposal" if repaired == proposal else "wait"
+            self._v2_feedback = (
+                f"JEV rejected {proposal} at {probability:.2f}. The repair did not provide a "
+                "different actionable label; choose another offered label for this unchanged board."
+            )
+        judge_record["outcome"] = "vetoed"
+        metadata = {**metadata, "judge": judge_record, "reason": "judge_rejected"}
+        return None, metadata, {"judge": judge_record}
 
     def _decision_state(self, actor: str) -> dict[str, object]:
         """Build the bounded participant view for one provider activation."""
@@ -235,37 +295,46 @@ class LaneWorker:
             started = time.monotonic()
             metadata: dict[str, object] = {}
             judge: dict[str, object] = {}
+            provider_failed = False
+            deadline_hit = False
             try:
                 if self.run.variant == "v2" and self.side == "right":
                     label, metadata, judge = self._v2_choice(state, choices, actor)
                 else:
                     label, metadata, judge = self._provider_choice(state, choices, actor)
             except providers.ProviderError as error:
-                # The UI remains useful before credentials are configured: the
-                # session uses a legal local fallback and marks the trace.
-                label, metadata = self._choice_offline(state, choices, actor)
-                metadata["provider_error"] = str(error)
+                label = None
+                provider_failed = True
+                deadline_hit = str(error) == "run_deadline_reached"
+                metadata = {"provider_error": str(error), "reason": "provider_error"}
             except (OSError, ValueError) as error:
-                label, metadata = self._choice_offline(state, choices, actor)
-                metadata["provider_error"] = type(error).__name__
-            candidate = next((item for item in state.get("available_candidates", []) if isinstance(item, dict) and item.get("label") == label), None)
+                label = None
+                provider_failed = True
+                metadata = {"provider_error": type(error).__name__, "reason": "provider_error"}
+            candidate = next((item for item in state.get("available_candidates", []) if isinstance(item, dict) and item.get("label") == label), None) if isinstance(label, str) else None
             latency = int((time.monotonic() - started) * 1000)
-            if not isinstance(candidate, dict):
+            deadline = self.run.deadline_at_ms
+            expired = self.stop_event.is_set() or (deadline is not None and int(time.time() * 1000) >= deadline)
+            if provider_failed:
+                result = {"status": "expired" if deadline_hit or expired else "error", "code": metadata.get("provider_error")}
+            elif expired:
+                result = {"status": "expired", "code": "run_deadline_reached"}
+            elif label is None and judge:
+                result = {"status": "vetoed", "code": "judge_rejected"}
+            elif not isinstance(candidate, dict):
                 result = {"status": "rejected", "code": "provider_choice_not_offered"}
             else:
                 action_type = str(candidate.get("action_type"))
                 payload = candidate.get("payload") if isinstance(candidate.get("payload"), dict) else {}
                 result = self.session.act(actor, int(state["session_seq"]), action_type, payload)
-                if action_type.startswith("move"):
-                    self._last_move_choice = label
             trace: dict[str, object] = {
                 "actor": actor,
                 "engine": "openrouter" if self.engine == "openrouter" else "jev",
                 "model": self.model,
                 "observed_session_seq": state.get("session_seq", 0),
                 "activation_reason": "claim_review_requested" if state.get("completion", {}).get("claim_open") else "board_changed",
-                "disposition": {MOVE_DISK: "act", POST_CLAIM: "claim", ASSESS_CLAIM: "assess", WAIT: "wait"}.get(str(candidate.get("action_type")) if isinstance(candidate, dict) else WAIT, "wait"),
-                "selected": {"label": label, "action_type": candidate.get("action_type") if isinstance(candidate, dict) else WAIT},
+                "disposition": "defer" if result.get("status") in {"vetoed", "error", "expired"} else {MOVE_DISK: "act", POST_CLAIM: "claim", ASSESS_CLAIM: "assess", WAIT: "wait"}.get(str(candidate.get("action_type")) if isinstance(candidate, dict) else WAIT, "wait"),
+                "selected": {"label": label, "action_type": candidate.get("action_type")} if isinstance(candidate, dict) else None,
                 "status": result.get("status", "error"),
                 "latency_ms": latency,
                 "confidence": metadata.get("confidence"),
@@ -278,6 +347,10 @@ class LaneWorker:
             if "judge" in metadata:
                 trace["judge"] = metadata["judge"]
             self._trace(trace)
+            if provider_failed:
+                self.status = "time_limit" if deadline_hit or expired else "error"
+                self.run.publish()
+                return
             if self.session.completed:
                 self.status = "complete"
                 self.run.publish()
