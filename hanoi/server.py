@@ -543,6 +543,7 @@ class ComparisonHandler(BaseHTTPRequestHandler):
         except (BrokenPipeError, ConnectionResetError, OSError):
             return
         finally:
+            self.close_connection = True
             server.bus.unsubscribe(subscriber)
 
     def log_message(self, _format: str, *_arguments: object) -> None:
