@@ -27,9 +27,17 @@ Its Python tests mock provider calls and its `.env.example` contains names only.
 See [`minesweeper/README.md`](minesweeper/README.md) for the game contract,
 board limits, and the session refactor roadmap.
 
+[`hanoi/`](hanoi/) contains two standalone Tower of Hanoi comparisons. Start
+`npm run hanoi` and open `/` for the LLM-vs-JEV version or `/v2/` for the
+same-model baseline versus the same model with a bounded JEV proposal score.
+Both views use a local Python state engine, share a seeded starting board, and
+keep provider access on the server. See [`hanoi/README.md`](hanoi/README.md)
+for the action, claim, and review contract.
+
 ## Run the demo
 
-Node.js 20 or newer is the only runtime dependency; there are no npm packages to install.
+The route demo requires Node.js 20 or newer. The Minesweeper and Hanoi demos
+use Python 3.10 or newer. All three use only their language standard libraries.
 
 ```bash
 npm start
