@@ -37,6 +37,7 @@ class ServerTests(unittest.TestCase):
         self.assertIn("session_seq", page)
         self.assertIn("lane-pause", page)
         self.assertIn("lane-end", page)
+        self.assertIn("payload.variant!==variant", page)
 
 
 if __name__ == "__main__":
