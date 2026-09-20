@@ -15,6 +15,31 @@ class ProviderTests(unittest.TestCase):
         self.assertEqual(metadata["confidence"], 0.8)
         headers = request.call_args.args[2]
         self.assertEqual(headers, {"Authorization": "Bearer secret"})
+        payload = request.call_args.args[1]
+        self.assertEqual(payload["provider"], {"sort": "latency"})
+        prompt = payload["messages"][1]["content"]
+        self.assertIn("choice_history", prompt)
+        self.assertIn("recent_own_decisions", prompt)
+        self.assertIn("Do not claim completion while target_reached is false", prompt)
+
+    def test_openrouter_accepts_canonical_action_payload(self):
+        decision = {
+            "based_on_session_seq": 3,
+            "action": "move_disk",
+            "payload": {"from": "A", "to": "B", "disk": 1},
+        }
+        response = {"choices": [{"message": {"content": json.dumps(decision)}}]}
+        state = {
+            "session_seq": 3,
+            "available_candidates": [{
+                "label": "move:A>B:1",
+                "action_type": "move_disk",
+                "payload": {"from": "A", "to": "B", "disk": 1},
+            }],
+        }
+        with patch.object(providers, "_http_json", return_value=response):
+            label, _ = providers.openrouter_choose(state, {"move:A>B:1": "move"}, "model", key="secret")
+        self.assertEqual(label, "move:A>B:1")
 
     def test_jev_judge_only_scores_proposal(self):
         response = {"model": "jev", "answers": {"judge": {"noul": 0.72}}}
@@ -26,6 +51,18 @@ class ProviderTests(unittest.TestCase):
         payload = request.call_args.args[1]
         self.assertEqual(payload["questions"]["judge"]["type"], "noul")
         self.assertEqual(payload["state"]["proposed_action"], "move:A>B:1")
+        instructions = payload["questions"]["judge"]["instructions"]
+        self.assertIn("reverses the last move", instructions)
+        self.assertIn("target_reached is false", instructions)
+
+    def test_jev_choice_receives_completion_and_cycle_guidance(self):
+        response = {"answers": {"choice": {"choice": "move:A>B:1", "confidence": 0.7, "probabilities": {"move:A>B:1": 0.7, "move:A>C:1": 0.3}}}}
+        with patch.object(providers, "_http_json", return_value=response) as request:
+            _, metadata = providers.jev_choose({}, {"move:A>B:1": "move"}, key="secret")
+        instructions = request.call_args.args[1]["questions"]["choice"]["instructions"]
+        self.assertIn("choice_history", instructions)
+        self.assertIn("Never claim completion while target_reached is false", instructions)
+        self.assertEqual(metadata["probabilities"]["move:A>B:1"], 0.7)
 
     def test_dotenv_aliases(self):
         with patch.dict(os.environ, {}, clear=True):

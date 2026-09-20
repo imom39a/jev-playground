@@ -216,6 +216,48 @@ class HanoiSession:
             "hint": "break_cycle" if repeated else "progress",
         }
 
+    def _recent_moves(self) -> list[dict[str, object]]:
+        moves: list[dict[str, object]] = []
+        for item in list(self.history)[-16:]:
+            move = item.get("move")
+            if not isinstance(move, dict):
+                continue
+            source, destination, disk = move.get("from"), move.get("to"), move.get("disk")
+            if source in RODS and destination in RODS and isinstance(disk, int):
+                moves.append({
+                    "revision": item.get("revision"),
+                    "label": f"move:{source}>{destination}:{disk}",
+                    "move": dict(move),
+                })
+        return moves[-8:]
+
+    def _choice_history(self, moves: list[Move]) -> dict[str, dict[str, object]]:
+        """Describe bounded history facts for each legal successor.
+
+        These facts do not choose a move. They make the consequences of each
+        offered move explicit so a stateless provider need not reconstruct the
+        session's bounded memory from scratch on every turn.
+        """
+        visits = Counter(str(item.get("fingerprint")) for item in self.history)
+        recent_labels = {str(item["label"]) for item in self._recent_moves()}
+        undo_label: str | None = None
+        if self.last_move and isinstance(self.last_move.get("move"), dict):
+            last = self.last_move["move"]
+            undo_label = f"move:{last.get('to')}>{last.get('from')}:{last.get('disk')}"
+        result: dict[str, dict[str, object]] = {}
+        for move in moves:
+            resulting = {rod: list(self.board[rod]) for rod in RODS}
+            resulting[move.source].pop()
+            resulting[move.destination].append(move.disk)
+            label = move.label()
+            is_target = resulting == {"A": [], "B": [], "C": list(range(self.disks, 0, -1))}
+            result[label] = {
+                "visits": 0 if is_target else visits[board_fingerprint(resulting)],
+                "repeats_recent": label in recent_labels,
+                "undoes_last": label == undo_label,
+            }
+        return result
+
     def _completion(self) -> dict[str, object]:
         claim = self.claim
         active = claim is not None and not self.completed
@@ -242,20 +284,39 @@ class HanoiSession:
     def candidates(self, actor: str | None = None) -> list[dict[str, object]]:
         """Return a closed candidate set shared by provider and UI."""
         values: list[dict[str, object]] = []
-        for move in self.legal_moves():
+        moves = self.legal_moves()
+        history = self._choice_history(moves)
+        for move in moves:
+            facts = history[move.label()]
+            notes: list[str] = []
+            visits = facts["visits"]
+            if isinstance(visits, int) and visits > 0:
+                notes.append(f"resulting board was seen {visits} time(s) before")
+            if facts["repeats_recent"]:
+                notes.append("already played in the last few moves")
+            if facts["undoes_last"]:
+                notes.append("reverses the most recent move")
+            description = f"Move disk {move.disk} from {move.source} to {move.destination}."
+            if notes:
+                description = f"{description} ({'; '.join(notes)})."
+            if self.target_reached:
+                description = f"{description} This moves a disk off the completed target tower."
             values.append({
                 "label": move.label(),
                 "action_type": MOVE_DISK,
                 "payload": move.as_dict(),
-                "description": f"Move disk {move.disk} from {move.source} to {move.destination}.",
+                "description": description,
             })
         if not self.completed:
             if self.claim is None:
+                claim_description = "Claim completion only if you judge that the objective is complete."
+                if self.target_reached:
+                    claim_description = "The complete tower is on target rod C; record your completion claim."
                 values.append({
                     "label": POST_CLAIM,
                     "action_type": POST_CLAIM,
                     "payload": {"work_revision": self.work_revision},
-                    "description": "Assert that the objective is complete; other participants review it.",
+                    "description": claim_description,
                 })
             elif actor is not None and actor != self.claim.get("claimant") and actor in self.claim.get("electorate", []):
                 for assessment in ASSESSMENTS:
@@ -269,12 +330,15 @@ class HanoiSession:
                         },
                         "description": f"Review the open claim and {assessment} it.",
                     })
-            values.append({
-                "label": WAIT,
-                "action_type": WAIT,
-                "payload": {},
-                "description": "Wait for another participant or the next activation.",
-            })
+            # This standalone runner has no external scheduler that can wake a
+            # waiting participant. Offer wait only if no concrete action exists.
+            if not values:
+                values.append({
+                    "label": WAIT,
+                    "action_type": WAIT,
+                    "payload": {},
+                    "description": "Wait for a new observation or request.",
+                })
         return values
 
     def available_choices(self, actor: str | None = None) -> dict[str, str]:
@@ -282,6 +346,15 @@ class HanoiSession:
 
     def snapshot(self, actor: str | None = None) -> dict[str, object]:
         candidates = self.candidates(actor)
+        choice_history = self._choice_history(self.legal_moves())
+        recent_moves = self._recent_moves()
+        immediate_undo = None
+        if self.last_move and isinstance(self.last_move.get("move"), dict):
+            last = self.last_move["move"]
+            immediate_undo = f"move:{last.get('to')}>{last.get('from')}:{last.get('disk')}"
+        current_visits = sum(
+            item.get("fingerprint") == board_fingerprint(self.board) for item in self.history
+        )
         return {
             "session_seq": self.session_seq,
             "disks": self.disks,
@@ -296,9 +369,13 @@ class HanoiSession:
             "completion": self._completion(),
             "target_reached": self.target_reached,
             "last_move": dict(self.last_move) if self.last_move else None,
+            "recent_moves": recent_moves,
+            "immediate_undo": immediate_undo,
             "contributions_by_member": dict(self.contributions),
             "recent_history": list(self.history)[-16:],
             "cycle_hint": self._cycle_hint(),
+            "state_visit": {"visits": current_visits, "cycle_hint": current_visits > 1},
+            "choice_history": choice_history,
             "available_candidates": candidates,
             "available_choices": {str(item["label"]): str(item["description"]) for item in candidates},
         }

@@ -8,7 +8,6 @@ import copy
 import json
 import os
 import queue
-import random
 import secrets
 import threading
 import time
@@ -24,14 +23,9 @@ MAX_BODY = 24_000
 MAX_CLIENTS = 32
 MAX_EVENTS = 128
 MAX_DECISIONS = 128
-MAX_SOLVERS = 16
 DEFAULT_DURATION = 300
-DEFAULT_SOLVERS = 3
+DEFAULT_SOLVERS = 1
 DEFAULT_PORT = 5491
-PARTICIPANTS = (
-    "nova", "atlas", "cipher", "ember", "onyx", "viper", "zenith", "lumen",
-    "quasar", "orbit", "raven", "sable", "cobalt", "indigo", "jade", "aster",
-)
 
 
 def _int(value: object, name: str, minimum: int, maximum: int) -> int:
@@ -52,12 +46,6 @@ def _model(value: object, fallback: str) -> str:
     if not isinstance(value, str) or not value or len(value) > 128 or any(ch.isspace() for ch in value):
         raise HanoiError("model_invalid")
     return value
-
-
-def _participants(count: int, seed: int) -> list[str]:
-    names = list(PARTICIPANTS)
-    random.Random(seed).shuffle(names)
-    return names[:count]
 
 
 class EventBus:
@@ -154,15 +142,14 @@ class LaneWorker:
 
     def _choice_offline(self, state: dict[str, object], choices: dict[str, str], actor: str) -> tuple[str, dict[str, object]]:
         completion = state.get("completion") if isinstance(state.get("completion"), dict) else {}
-        if completion.get("claim_open") and f"assess:endorse" in choices:
+        if completion.get("claim_open") and "assess:endorse" in choices:
             return "assess:endorse", {"offline": True, "confidence": 0.6, "rationale": "bounded local fallback reviewed the open claim"}
         if state.get("target_reached") and POST_CLAIM in choices:
             return POST_CLAIM, {"offline": True, "confidence": 0.9, "rationale": "the objective board is assembled and needs a participant claim"}
         move_labels = [label for label in choices if label.startswith("move:")]
         if self._last_move_choice:
-            reversed_label = self._last_move_choice.replace("move:", "move:", 1)
             try:
-                _, rods, disk = reversed_label.split(":")
+                _, rods, disk = self._last_move_choice.split(":")
                 source, destination = rods.split(">")
                 reverse = f"move:{destination}>{source}:{disk}"
                 preferred = [label for label in move_labels if label != reverse]
@@ -171,7 +158,7 @@ class LaneWorker:
             except ValueError:
                 pass
         if move_labels:
-            return move_labels[0], {"offline": True, "confidence": 0.2, "rationale": "provider key unavailable; selected the first legal candidate"}
+            return move_labels[0], {"offline": True, "confidence": 0.2, "rationale": "provider unavailable; selected the first legal candidate"}
         return WAIT, {"offline": True, "confidence": 0.0, "rationale": "no actionable candidate was available"}
 
     def _provider_choice(self, state: dict[str, object], choices: dict[str, str], actor: str) -> tuple[str, dict[str, object], dict[str, object]]:
@@ -207,6 +194,30 @@ class LaneWorker:
         # The judge only scores proposals. `selected` always came from the LLM.
         return selected, metadata, {"judge": judge_record}
 
+    def _decision_state(self, actor: str) -> dict[str, object]:
+        """Build the bounded participant view for one provider activation."""
+        state = self.session.snapshot(actor)
+        own: list[dict[str, object]] = []
+        for decision in reversed(self.decisions):
+            if decision.get("actor") != actor:
+                continue
+            selected = decision.get("selected")
+            own.append({
+                "observed_session_seq": decision.get("observed_session_seq"),
+                "selected": selected if isinstance(selected, dict) else None,
+                "status": decision.get("status"),
+                "reason": decision.get("reason"),
+            })
+            if len(own) == 4:
+                break
+        own.reverse()
+        completion = state.get("completion")
+        claim_open = isinstance(completion, dict) and completion.get("claim_open") is True
+        state["activation_reason"] = "claim_review_requested" if claim_open else "board_changed"
+        state["recent_events"] = list(self.events)[-8:]
+        state["recent_own_decisions"] = own
+        return state
+
     def _run(self) -> None:
         participants = list(self.session.participants)
         index = 0
@@ -216,7 +227,7 @@ class LaneWorker:
                 continue
             actor = participants[index % len(participants)]
             index += 1
-            state = self.session.snapshot(actor)
+            state = self._decision_state(actor)
             choices = state.get("available_choices")
             if not isinstance(choices, dict) or not choices:
                 time.sleep(0.05)
@@ -258,8 +269,10 @@ class LaneWorker:
                 "status": result.get("status", "error"),
                 "latency_ms": latency,
                 "confidence": metadata.get("confidence"),
+                "probabilities": metadata.get("probabilities"),
                 "rationale": metadata.get("rationale"),
                 "reason": metadata.get("reason"),
+                "provider_error": metadata.get("provider_error"),
                 "recent_event_count": len(self.events),
             }
             if "judge" in metadata:
@@ -346,9 +359,9 @@ class ComparisonRun:
             self.variant = config.get("variant", "v1") if config.get("variant", "v1") in {"v1", "v2"} else "v1"
             disks = _int(config.get("disks", 3), "disks", 1, 10)
             duration = _int(config.get("duration_seconds", DEFAULT_DURATION), "duration_seconds", 1, 3600)
-            count = _int(config.get("solver_count", DEFAULT_SOLVERS), "solver_count", 1, MAX_SOLVERS)
-            left_count = _int(config.get("left_solver_count", count), "left_solver_count", 1, MAX_SOLVERS)
-            right_count = _int(config.get("right_solver_count", count), "right_solver_count", 1, MAX_SOLVERS)
+            count = _int(config.get("solver_count", DEFAULT_SOLVERS), "solver_count", 1, 1)
+            left_count = _int(config.get("left_solver_count", count), "left_solver_count", 1, 1)
+            right_count = _int(config.get("right_solver_count", count), "right_solver_count", 1, 1)
             model = _model(config.get("model"), providers.DEFAULT_MODEL)
             judge_model = _model(config.get("judge_model"), providers.DEFAULT_JEV_MODEL)
             threshold = _float(config.get("judge_threshold", 0.5), "judge_threshold", 0.0, 1.0)
@@ -359,11 +372,10 @@ class ComparisonRun:
             seed = None if seed_value is None else _int(seed_value, "board_seed", 0, 9_007_199_254_740_991)
             if randomize and seed is None:
                 seed = secrets.randbits(63)
-            seed_for_names = seed or 1
             from .game import initial_board
             board = initial_board(disks, randomize=randomize, seed=seed)
-            left_people = _participants(left_count, seed_for_names)
-            right_people = _participants(right_count, seed_for_names + 17)
+            left_people = ["llm-solver"]
+            right_people = ["jev-solver" if self.variant == "v1" else "llm-jev-solver"]
             self.config = {"variant": self.variant, "disks": disks, "duration_seconds": duration, "solver_count": count, "left_solver_count": left_count, "right_solver_count": right_count, "model": model, "judge_model": judge_model, "judge_threshold": threshold, "randomize_board": randomize, "board_seed": seed}
             self.started_at_ms = int(time.time() * 1000)
             self.deadline_at_ms = self.started_at_ms + duration * 1000

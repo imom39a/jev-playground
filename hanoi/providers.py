@@ -136,6 +136,35 @@ def _choice_content(response: dict[str, object]) -> dict[str, object]:
     return decision
 
 
+def _resolve_openrouter_decision(
+    decision: dict[str, object], state: dict[str, object], candidates: dict[str, str]
+) -> str:
+    """Resolve either a closed label or a canonical action/payload reply."""
+    based_on = decision.get("based_on_session_seq")
+    if based_on is not None and based_on != state.get("session_seq"):
+        raise ProviderError("provider_decision_stale")
+    label = decision.get("label")
+    if isinstance(label, str) and label in candidates:
+        return label
+    action = decision.get("action")
+    if isinstance(action, str) and action in candidates:
+        return action
+    payload = decision.get("payload")
+    offered = state.get("available_candidates")
+    if isinstance(action, str) and isinstance(payload, dict) and isinstance(offered, list):
+        matches = [
+            item for item in offered
+            if isinstance(item, dict)
+            and item.get("action_type") == action
+            and item.get("payload") == payload
+            and isinstance(item.get("label"), str)
+            and item.get("label") in candidates
+        ]
+        if len(matches) == 1:
+            return str(matches[0]["label"])
+    raise ProviderError("provider_choice_not_offered")
+
+
 def openrouter_choose(
     state: dict[str, object],
     candidates: dict[str, str],
@@ -149,10 +178,16 @@ def openrouter_choose(
     if not key:
         raise ProviderError("provider_key_missing")
     guidance = (
-        "You are solving a bounded Tower of Hanoi session. Choose exactly one label from "
-        "available_choices. Legal work and completion claims are participant actions; a solved "
-        "board still needs an explicit claim. Use cycle_hint and recent_history to avoid loops. "
-        "Return JSON with label, confidence, rationale, and optional reason."
+        "You are the autonomous participant solving this Tower of Hanoi session. Treat the "
+        "supplied board and session_seq as authoritative. The objective is to move the full "
+        "tower to rod C under the stated rules. Choose exactly one offered label. Use "
+        "recent_moves, recent_own_decisions, cycle_hint, and choice_history: avoid an immediate "
+        "reverse, a recently repeated move, or a successor board already seen when another legal "
+        "move can make progress. The session never declares success from the board alone. If "
+        "target_reached is true and no claim is open, choose post_completion_claim. If a claim is "
+        "open, assess it from the visible board. Do not claim completion while target_reached is "
+        "false. Return JSON with label, based_on_session_seq, confidence, rationale, and optional "
+        "reason. You may instead return the matching canonical action and payload."
     )
     if feedback:
         guidance += f" A verifier rejected the previous proposal: {feedback}. Repair it once."
@@ -166,14 +201,13 @@ def openrouter_choose(
             ],
             "temperature": 0,
             "response_format": {"type": "json_object"},
+            "provider": {"sort": "latency"},
         },
         {"Authorization": f"Bearer {key}"},
         min(max(1.0, timeout), OPENROUTER_TIMEOUT),
     )
     decision = _choice_content(response)
-    label = decision.get("label", decision.get("action"))
-    if not isinstance(label, str) or label not in candidates:
-        raise ProviderError("provider_choice_not_offered")
+    label = _resolve_openrouter_decision(decision, state, candidates)
     metadata: dict[str, object] = {
         "provider_model": response.get("model") if isinstance(response.get("model"), str) else model,
         "confidence": _bounded_number(decision.get("confidence")),
@@ -202,7 +236,17 @@ def jev_choose(
             "questions": {
                 "choice": {
                     "type": "choice",
-                    "instructions": "Choose the single best next action from the offered labels. Never invent a label.",
+                    "instructions": (
+                        "Choose the single next action that best advances the Tower of Hanoi "
+                        "objective. Use the authoritative current board, recent_moves, "
+                        "recent_own_decisions, cycle_hint, and choice_history. choice_history "
+                        "marks successor boards already seen, recently repeated moves, and moves "
+                        "that reverse the most recent move; avoid those when another offered move "
+                        "can make progress. If target_reached is true and no claim is open, choose "
+                        "post_completion_claim. If a claim is open, assess it from the visible "
+                        "board. Never claim completion while target_reached is false. Choose only "
+                        "one offered label and never invent a label."
+                    ),
                     "criteria": candidates,
                 }
             },
@@ -248,7 +292,16 @@ def jev_score_proposal(
             "questions": {
                 "judge": {
                     "type": "noul",
-                    "instructions": "Would you endorse this proposed action as a sound next step for the objective? Score the proposal only; do not choose a different action.",
+                    "instructions": (
+                        "Would you endorse proposed_action as the best next action for the Tower "
+                        "of Hanoi objective? Use the current board, recent_moves, cycle_hint, and "
+                        "choice_history. Answer false when the proposal immediately reverses the "
+                        "last move, returns to a board already seen, repeats a recent move without "
+                        "progress, claims completion while target_reached is false, or moves a disk "
+                        "off the completed target tower. Answer true for post_completion_claim when "
+                        "target_reached is true and no claim is open. Score this proposal only; do "
+                        "not select a different action."
+                    ),
                 }
             },
         },

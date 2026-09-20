@@ -15,9 +15,16 @@ npm run hanoi
 
 The session accepts one to ten disks, a default all-A tower or a deterministic
 seeded reachable mid-state, legal single-disk moves, bounded recent history,
-cycle hints, and configurable participant counts and time limits. Each lane
-has pause, resume, end, a bounded event feed, decision traces, and an SSE
-projection stream.
+cycle hints, and a configurable time limit. Each lane has exactly one
+participant, plus pause, resume, end, a bounded event feed, decision traces,
+and an SSE projection stream. Solver-count API fields are rejected unless they
+are `1`.
+
+Each provider activation includes the authoritative board, recent moves,
+bounded prior decisions, and per-choice facts for successor-board visits,
+recent repetition, and immediate reversal. These are observations rather than
+a built-in solution. The participant still chooses every move and decides when
+to claim completion.
 
 Completion is participant-owned. A participant posts `post_completion_claim`,
 which records the current work revision and opens a review round. Other

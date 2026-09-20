@@ -27,13 +27,32 @@ class HanoiGameTests(unittest.TestCase):
         self.assertIn("move:A>B:1", labels)
         self.assertIn("move:A>C:1", labels)
         self.assertIn("post_completion_claim", labels)
-        self.assertIn("wait", labels)
+        self.assertNotIn("wait", labels)
         accepted = session.act("one", 0, "move_disk", {"from": "A", "to": "B", "disk": 1})
         self.assertEqual(accepted["status"], "accepted")
         stale = session.act("two", 0, "move_disk", {"from": "A", "to": "C", "disk": 2})
         self.assertEqual(stale["status"], "stale")
         blocked = session.act("two", 1, "move_disk", {"from": "A", "to": "B", "disk": 3})
         self.assertEqual(blocked["status"], "rejected")
+
+    def test_snapshot_restores_bounded_candidate_history(self):
+        session = HanoiSession(3, participants=["one"])
+        session.act("one", 0, "move_disk", {"from": "A", "to": "B", "disk": 1})
+        state = session.snapshot("one")
+        reverse = state["choice_history"]["move:B>A:1"]
+        self.assertTrue(reverse["undoes_last"])
+        self.assertEqual(reverse["visits"], 1)
+        self.assertIn("reverses the most recent move", state["available_choices"]["move:B>A:1"])
+        self.assertEqual(state["recent_moves"][-1]["label"], "move:A>B:1")
+        self.assertNotIn("wait", state["available_choices"])
+
+    def test_target_state_explains_claim_and_move_consequences(self):
+        session = HanoiSession(1, participants=["one"])
+        session.act("one", 0, "move_disk", {"from": "A", "to": "C", "disk": 1})
+        state = session.snapshot("one")
+        self.assertTrue(state["target_reached"])
+        self.assertIn("complete tower", state["available_choices"]["post_completion_claim"])
+        self.assertIn("off the completed target tower", state["available_choices"]["move:C>A:1"])
 
     def test_move_clears_claim_and_target_never_auto_completes(self):
         session = HanoiSession(1, participants=["one", "two"])
